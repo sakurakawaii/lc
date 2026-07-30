@@ -5,7 +5,7 @@ Stage 1 orchestration: extracts the input zip to a temporary workspace, walks
 every file, extracts text/images via extractors.py, categorizes each via
 llm_service.categorize_document() (text or Vision API, depending on file
 type), and non-destructively copies each file into its routed destination
-(evidence_package/<category>/ or Excluded_Documents/).
+(Evidence_Package/<category>/ or Excluded_Documents/).
 
 On success, also writes:
     - {base_output_dir}/stage1_cache.json — cached relevant texts, so a later
@@ -193,7 +193,7 @@ def process_evidence_package(
         {
             "success": bool,
             "relevant_texts": List[str],        # text of every file routed as relevant
-            "category_counts": Dict[str, int],  # counts per evidence_package/<category>
+            "category_counts": Dict[str, int],  # counts per Evidence_Package/<category>
             "excluded_count": int,
             "total_files": int,
             "audit_log": List[Dict],            # {file_name, category, is_relevant, reason}
@@ -221,7 +221,7 @@ def process_evidence_package(
         return result
 
     attachment_dir = os.path.join(tmp_workspace_dir, "tmp_attachments")
-    evidence_root = os.path.join(base_output_dir, "evidence_package")
+    evidence_root = os.path.join(base_output_dir, "Evidence_Package")
     excluded_dir = os.path.join(base_output_dir, "Excluded_Documents")
 
     archive_message = f"Extracting archive {os.path.basename(zip_path)}..."
@@ -289,7 +289,7 @@ def process_evidence_package(
             if is_relevant:
                 category = categorization.get("category") or "Uncategorized"
                 dest_dir = os.path.join(evidence_root, category)
-                route_message = f"Routing {filename} to evidence_package/{category}..."
+                route_message = f"Routing {filename} to Evidence_Package/{category}..."
                 _report(progress_callback, route_message)
                 copied = _safe_copy(file_path, dest_dir)
                 _report(progress_callback, route_message, done=True)

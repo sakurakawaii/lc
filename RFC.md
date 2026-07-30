@@ -43,5 +43,5 @@ The CLI will be built in four isolated modules to ensure maintainability and tes
     4. Triggers the Stage 2 two-pass redaction and summary generation upon approval.
 
 ## 4. Exit Conditions
-*   **Stage 1:** A structured directory at `./output/evidence_package/` containing categorized evidence folders alongside `Excluded_Documents/` with log reasons.
+*   **Stage 1:** A structured directory at `./output/Evidence_Package/` containing categorized evidence folders alongside `Excluded_Documents/` with log reasons.
 *   **Stage 2:** An `anonymous_summary.txt` file written to disk following explicit CLI user authorization, derived entirely from the explicitly redacted context.

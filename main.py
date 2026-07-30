@@ -57,7 +57,7 @@ def _print_audit_summary(result):
     table.add_column("File Count", justify="right", style="magenta")
 
     for category in sorted(result["category_counts"]):
-        table.add_row(f"evidence_package/{category}", str(result["category_counts"][category]))
+        table.add_row(f"Evidence_Package/{category}", str(result["category_counts"][category]))
 
     table.add_row("Excluded_Documents", str(result["excluded_count"]))
     table.add_row("Total Files Processed", str(result["total_files"]), style="bold")

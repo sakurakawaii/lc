@@ -116,7 +116,7 @@ class TestRoutingLogic(unittest.TestCase):
         mock_copy2.assert_called_once()
         src_arg, dest_arg = mock_copy2.call_args[0]
         self.assertIn("evidence.pdf", src_arg)
-        self.assertIn("evidence_package", dest_arg)
+        self.assertIn("Evidence_Package", dest_arg)
         self.assertIn("Termination_Documents", dest_arg)
         self.assertIn("evidence.pdf", dest_arg)
 

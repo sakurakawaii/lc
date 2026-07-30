@@ -360,6 +360,40 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(result["category_counts"], {})
 
     @patch("pipeline.shutil.rmtree")
+    @patch("pipeline.shutil.copy2")
+    @patch("pipeline.os.path.exists", return_value=False)
+    @patch("pipeline.os.makedirs")
+    @patch("pipeline.llm_service.categorize_document")
+    @patch("pipeline.extractors.extract_image", return_value=("", "image/png"))
+    @patch("pipeline.os.walk", return_value=[("./tmp_workspace/", [], ["empty.png"])])
+    @patch("pipeline.zipfile.ZipFile")
+    @patch("pipeline.os.path.isfile", return_value=True)
+    def test_empty_image_file_is_excluded_without_calling_llm(
+        self,
+        mock_isfile,
+        mock_zipfile_cls,
+        mock_walk,
+        mock_extract_image,
+        mock_categorize,
+        mock_makedirs,
+        mock_exists,
+        mock_copy2,
+        mock_rmtree,
+    ):
+        mock_zipfile_cls.return_value = self._zipfile_context_manager()
+
+        result = pipeline.process_evidence_package(
+            "case.zip", base_output_dir="./output", tmp_workspace_dir="./tmp_workspace/"
+        )
+
+        mock_categorize.assert_not_called()
+        self.assertEqual(result["excluded_count"], 1)
+        self.assertEqual(result["category_counts"], {})
+        self.assertEqual(
+            result["audit_log"][0]["reason"], "Unsupported file type or no extractable text."
+        )
+
+    @patch("pipeline.shutil.rmtree")
     @patch("pipeline.shutil.copy2", side_effect=OSError("disk full"))
     @patch("pipeline.os.path.exists", return_value=False)
     @patch("pipeline.os.makedirs")

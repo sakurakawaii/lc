@@ -4,10 +4,18 @@ Unit tests for main.py's CLI workflow.
 sys.argv, rich.prompt.Confirm.ask, rich Console output, and the
 pipeline/sanitizer/llm_service functions are all mocked — no real file I/O,
 terminal rendering, or network calls happen here.
+
+The exception is TestRichMarkupSafety, which deliberately uses a real
+rich.console.Console (writing to an in-memory buffer instead of the mocked
+`main.console`) — the bug it guards against (untrusted text being parsed as
+Rich markup) only reproduces against real Rich rendering, not a MagicMock.
 """
 
+import io
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
+
+from rich.console import Console
 
 import main
 
@@ -153,6 +161,68 @@ class TestPrintAuditSummary(unittest.TestCase):
         matches = [i for i, label in enumerate(row_labels) if "Copy Failures" in label]
         self.assertEqual(len(matches), 1)
         self.assertIn("1", count_cells[matches[0]])
+
+
+class TestRichMarkupSafety(unittest.TestCase):
+    """
+    Guards against untrusted content (a filename from the input zip, or LLM
+    text that echoes bracketed placeholders from a document) being parsed as
+    Rich markup instead of rendered literally. A stray "[/]" or a valid-looking
+    tag like "[bold red]" in that text previously raised rich.errors.MarkupError
+    or produced spoofed styling once it reached a real Console — a mocked
+    console never exercises Rich's markup parser, so these tests use a real
+    one writing to an in-memory buffer.
+    """
+
+    def _capturing_console(self):
+        return Console(file=io.StringIO(), force_terminal=False, width=200)
+
+    def test_decision_table_handles_bracket_content_without_crashing(self):
+        result = _base_result(
+            audit_log=[
+                {
+                    "file_name": "[Draft] termination[/].pdf",
+                    "category": "Termination_Documents",
+                    "is_relevant": True,
+                    "reason": "Contains [PRIVILEGED] info and a stray [/] close tag.",
+                    "copy_failed": False,
+                },
+                {
+                    "file_name": "evil[/][bold green]FAKE-APPROVED[/bold green].docx",
+                    "category": "",
+                    "is_relevant": False,
+                    "reason": "Not relevant.",
+                    "copy_failed": True,
+                },
+            ]
+        )
+        capturing_console = self._capturing_console()
+
+        with patch("main.console", capturing_console):
+            main._print_decision_table(result)
+
+        output = capturing_console.file.getvalue()
+        self.assertIn("[Draft] termination[/].pdf", output)
+        self.assertIn("Contains [PRIVILEGED] info and a stray [/] close tag.", output)
+        self.assertIn("evil[/][bold green]FAKE-APPROVED[/bold green].docx", output)
+
+    def test_run_stage_1_progress_callback_handles_bracket_content_without_crashing(self):
+        capturing_console = self._capturing_console()
+
+        def fake_process(input_path, base_output_dir, progress_callback):
+            progress_callback("Extracting content from evil[/].pdf...", done=False)
+            progress_callback(
+                "Calling LLM for categorization of evil[bold red]x[/bold red].pdf...", done=True
+            )
+            return _base_result()
+
+        with patch("main.console", capturing_console), patch(
+            "main.process_evidence_package", side_effect=fake_process
+        ):
+            main._run_stage_1("case.zip", "./output")
+
+        output = capturing_console.file.getvalue()
+        self.assertIn("evil", output)
 
 
 class TestYesFlow(unittest.TestCase):

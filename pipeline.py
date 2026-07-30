@@ -76,7 +76,12 @@ def _extract_content_and_children(file_path, attachment_dir):
             return "text", body, list(attachments)
         if ext in IMAGE_EXTENSIONS:
             image_base64, media_type = extractors.extract_image(file_path)
-            if image_base64 is None:
+            if not image_base64:
+                # Covers both a failed read (None) and a 0-byte image file
+                # (base64.b64encode(b"") == b"" is falsy too), so an empty
+                # file is reported as unsupported/no content up front rather
+                # than round-tripping to the LLM just to hit the same result
+                # via a generic "categorization failed" fallback.
                 return "unsupported", None, []
             return "image", (image_base64, media_type), []
         return "unsupported", None, []

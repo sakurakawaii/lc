@@ -12,6 +12,7 @@ import os
 
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
@@ -84,11 +85,15 @@ def _print_decision_table(result):
             decision = "[bold green]Relevant[/bold green]"
         else:
             decision = "[bold red]Excluded[/bold red]"
-        reason = entry["reason"]
+        # file_name and reason may echo untrusted content (an evidence file's
+        # own name, or LLM text that quotes bracketed placeholders from the
+        # document) — escape() neutralizes it as Rich markup instead of
+        # letting it be parsed as style tags, which can raise MarkupError.
+        reason = escape(entry["reason"])
         if entry.get("copy_failed"):
             decision += "\n[bold red]COPY FAILED[/bold red]"
             reason = f"{reason} [bold red](file was NOT saved to the output directory!)[/bold red]"
-        table.add_row(entry["file_name"], decision, reason)
+        table.add_row(escape(entry["file_name"]), decision, reason)
 
     console.print(table)
 
@@ -117,10 +122,14 @@ def _run_stage_1(input_path, output_dir):
         task = progress.add_task("Starting Stage 1...", total=None)
 
         def _update_progress(message, done=False):
+            # message often embeds a filename from the input zip, which is
+            # untrusted content — escape it so Rich can't interpret stray
+            # bracket sequences in it as markup (see _print_decision_table).
+            safe_message = escape(message)
             if done:
-                console.print(f"[dim]✓ Completed: {message.rstrip('.')}[/dim]")
+                console.print(f"[dim]✓ Completed: {safe_message.rstrip('.')}[/dim]")
             else:
-                progress.update(task, description=message)
+                progress.update(task, description=safe_message)
 
         return process_evidence_package(
             input_path, base_output_dir=output_dir, progress_callback=_update_progress

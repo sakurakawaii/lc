@@ -68,6 +68,42 @@ class TestStage1Failure(unittest.TestCase):
         mock_confirm_ask.assert_not_called()
 
 
+class TestApiKeyCheck(unittest.TestCase):
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.process_evidence_package")
+    def test_missing_api_key_aborts_before_any_processing(self, mock_process, mock_console):
+        with patch.dict("main.os.environ", {}, clear=True):
+            with patch("sys.argv", ["main.py"]):
+                main.main()
+
+        mock_process.assert_not_called()
+
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Progress")
+    @patch("main.Confirm.ask")
+    @patch("main.process_evidence_package")
+    def test_present_api_key_proceeds_to_stage1(
+        self, mock_process, mock_confirm_ask, mock_progress_cls, mock_console
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result(
+            success=False,
+            relevant_texts=[],
+            category_counts={},
+            excluded_count=0,
+            total_files=0,
+            audit_log=[],
+            cache_path=None,
+            audit_report_path=None,
+        )
+
+        with patch.dict("main.os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("sys.argv", ["main.py"]):
+                main.main()
+
+        mock_process.assert_called_once()
+
+
 class TestYesFlow(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     @patch("main.os.makedirs")

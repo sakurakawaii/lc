@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 EXCLUSION_LOG_FILENAME = "exclusion_log.txt"
 CACHE_FILENAME = "stage1_cache.json"
 AUDIT_REPORT_FILENAME = "audit_report.csv"
-AUDIT_REPORT_FIELDNAMES = ["file_name", "category", "is_relevant", "reason"]
+AUDIT_REPORT_FIELDNAMES = ["file_name", "category", "is_relevant", "reason", "copy_failed"]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 
@@ -277,14 +277,7 @@ def process_evidence_package(
                 }
 
             is_relevant = bool(categorization.get("is_relevant"))
-            audit_log.append(
-                {
-                    "file_name": filename,
-                    "category": categorization.get("category") or "",
-                    "is_relevant": is_relevant,
-                    "reason": categorization.get("reason", ""),
-                }
-            )
+            reason = categorization.get("reason", "")
 
             if is_relevant:
                 category = categorization.get("category") or "Uncategorized"
@@ -293,7 +286,8 @@ def process_evidence_package(
                 _report(progress_callback, route_message)
                 copied = _safe_copy(file_path, dest_dir)
                 _report(progress_callback, route_message, done=True)
-                if copied is not None:
+                copy_failed = copied is None
+                if not copy_failed:
                     result["category_counts"][category] = result["category_counts"].get(category, 0) + 1
                     if stage2_text:
                         result["relevant_texts"].append(stage2_text)
@@ -302,11 +296,27 @@ def process_evidence_package(
                 _report(progress_callback, route_message)
                 copied = _safe_copy(file_path, excluded_dir)
                 _report(progress_callback, route_message, done=True)
-                if copied is not None:
+                copy_failed = copied is None
+                if not copy_failed:
                     result["excluded_count"] += 1
-                    _log_exclusion_reason(
-                        excluded_dir, filename, categorization.get("reason", "")
-                    )
+                    _log_exclusion_reason(excluded_dir, filename, reason)
+
+            if copy_failed:
+                logger.error(
+                    "File %s was classified but could not be copied to output; "
+                    "it is NOT present in the output directory.",
+                    filename,
+                )
+
+            audit_log.append(
+                {
+                    "file_name": filename,
+                    "category": categorization.get("category") or "",
+                    "is_relevant": is_relevant,
+                    "reason": reason,
+                    "copy_failed": copy_failed,
+                }
+            )
 
         result["audit_log"] = audit_log
 

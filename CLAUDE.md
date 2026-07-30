@@ -10,7 +10,7 @@ This is a Python CLI application built for a legal evidence processing MVP.
 ## Technical Constraints & Stack
 - **Language**: Python 3.10+
 - **Environment**: ALWAYS use `python-dotenv` to load the `.env` file at the entry point. NEVER hardcode API keys.
-- **Allowed Libraries**: `anthropic`, `python-docx`, `PyPDF2`, `rich`, `python-dotenv`.
+- **Allowed Libraries**: `anthropic`, `python-docx`, `PyPDF2`, `rich`, `python-dotenv`, `tenacity` (retry/backoff for Anthropic API calls in `llm_service.py`).
 - **Forbidden Libraries**: Do NOT use `pandas` or heavy data science libraries.
 - **UI**: Pure CLI using `argparse` and `rich` for terminal output. No web frameworks.
 

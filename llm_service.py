@@ -211,8 +211,16 @@ Redacted case text:
 """
 
 
+_client: anthropic.Anthropic = None
+
+
 def _get_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    """Return a lazily-created, module-level Anthropic client shared by every
+    call in this module, instead of constructing a new one per API call."""
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    return _client
 
 
 def _track_usage(response) -> None:

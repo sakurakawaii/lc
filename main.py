@@ -76,7 +76,11 @@ def _print_decision_table(result):
             decision = "[bold green]Relevant[/bold green]"
         else:
             decision = "[bold red]Excluded[/bold red]"
-        table.add_row(entry["file_name"], decision, entry["reason"])
+        reason = entry["reason"]
+        if entry.get("copy_failed"):
+            decision += "\n[bold red]COPY FAILED[/bold red]"
+            reason = f"{reason} [bold red](file was NOT saved to the output directory!)[/bold red]"
+        table.add_row(entry["file_name"], decision, reason)
 
     console.print(table)
 
@@ -189,8 +193,31 @@ def _print_telemetry_report():
     )
 
 
+def _check_api_key():
+    """
+    Fail fast with a clear error if ANTHROPIC_API_KEY is not set, instead of
+    letting every downstream LLM call fail silently and fall back to
+    "irrelevant"/"categorization failed" results that look like a model
+    judgment rather than a missing credential.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    console.print(
+        Panel(
+            "[bold red]ANTHROPIC_API_KEY is not set.[/bold red] Add it to your .env "
+            "file (or export it in your shell) before running this CLI.",
+            title="[bold]Missing API Key[/bold]",
+            border_style="red",
+        )
+    )
+    return False
+
+
 def main(argv=None):
     args = _parse_args(argv)
+
+    if not _check_api_key():
+        return
 
     try:
         if args.skip_stage1:

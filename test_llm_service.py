@@ -94,7 +94,18 @@ def _mock_response_with_only_thinking(stop_reason: str = "max_tokens") -> MagicM
     return response
 
 
-class TestCategorizeDocument(unittest.TestCase):
+class _LLMServiceTestCase(unittest.TestCase):
+    """Resets llm_service's cached Anthropic client before each test, since the
+    client is now a module-level singleton (see llm_service._get_client) —
+    without this, a mock installed by an earlier test's @patch would leak into
+    later tests instead of each test getting its own fresh mock client."""
+
+    def setUp(self):
+        super().setUp()
+        llm_service._client = None
+
+
+class TestCategorizeDocument(_LLMServiceTestCase):
     @patch("llm_service.anthropic.Anthropic")
     def test_valid_tool_input_is_parsed_correctly(self, mock_anthropic_cls):
         mock_client = MagicMock()
@@ -267,7 +278,7 @@ class TestCategorizeDocument(unittest.TestCase):
         self.assertEqual(result, dict(llm_service._CATEGORIZE_FALLBACK))
 
 
-class TestSemanticScrub(unittest.TestCase):
+class TestSemanticScrub(_LLMServiceTestCase):
     @patch("llm_service.anthropic.Anthropic")
     def test_returns_llm_redacted_text_on_success(self, mock_anthropic_cls):
         mock_client = MagicMock()
@@ -342,7 +353,7 @@ class TestSemanticScrub(unittest.TestCase):
         self.assertEqual(logged_stop_reason, "max_tokens")
 
 
-class TestGenerateSummary(unittest.TestCase):
+class TestGenerateSummary(_LLMServiceTestCase):
     @patch("llm_service.anthropic.Anthropic")
     def test_returns_llm_generated_summary_on_success(self, mock_anthropic_cls):
         mock_client = MagicMock()
@@ -420,7 +431,7 @@ class TestGenerateSummary(unittest.TestCase):
         self.assertEqual(logged_stop_reason, "max_tokens")
 
 
-class TestClientInitialization(unittest.TestCase):
+class TestClientInitialization(_LLMServiceTestCase):
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key-123"}, clear=False)
     @patch("llm_service.anthropic.Anthropic")
     def test_client_initialized_with_env_api_key(self, mock_anthropic_cls):
@@ -428,8 +439,9 @@ class TestClientInitialization(unittest.TestCase):
         mock_anthropic_cls.assert_called_once_with(api_key="test-key-123")
 
 
-class TestTokenTracker(unittest.TestCase):
+class TestTokenTracker(_LLMServiceTestCase):
     def setUp(self):
+        super().setUp()
         llm_service._token_usage["input_tokens"] = 0
         llm_service._token_usage["output_tokens"] = 0
 
@@ -493,7 +505,7 @@ class TestTokenTracker(unittest.TestCase):
         self.assertEqual(report["total_cost_usd"], 0.0)
 
 
-class TestRetryBehavior(unittest.TestCase):
+class TestRetryBehavior(_LLMServiceTestCase):
     """
     Covers the tenacity-based retry policy shared by every Anthropic call in
     this module (via llm_service._create_message): network errors, 429, and

@@ -395,6 +395,8 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(result["total_files"], 1)
         self.assertEqual(result["category_counts"], {})
         self.assertEqual(result["relevant_texts"], [])
+        self.assertEqual(len(result["audit_log"]), 1)
+        self.assertTrue(result["audit_log"][0]["copy_failed"])
 
     @patch("pipeline.shutil.rmtree")
     @patch("pipeline.shutil.copy2")
@@ -469,6 +471,7 @@ class TestRoutingLogic(unittest.TestCase):
                 "category": "Termination_Documents",
                 "is_relevant": True,
                 "reason": "Dismissal letter.",
+                "copy_failed": False,
             },
         )
         self.assertEqual(
@@ -478,6 +481,7 @@ class TestRoutingLogic(unittest.TestCase):
                 "category": "",
                 "is_relevant": False,
                 "reason": "Unrelated grocery list.",
+                "copy_failed": False,
             },
         )
 
@@ -559,6 +563,7 @@ class TestRoutingLogic(unittest.TestCase):
                     "category": "",
                     "is_relevant": False,
                     "reason": "Not related.",
+                    "copy_failed": False,
                 }
             ]
         )

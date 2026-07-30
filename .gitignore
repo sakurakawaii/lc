@@ -2,3 +2,4 @@
 .env
 __pycache__/
 output/
+testdata/tmp_attachments/

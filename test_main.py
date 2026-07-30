@@ -1,0 +1,358 @@
+"""
+Unit tests for main.py's CLI workflow.
+
+sys.argv, rich.prompt.Confirm.ask, rich Console output, and the
+pipeline/sanitizer/llm_service functions are all mocked — no real file I/O,
+terminal rendering, or network calls happen here.
+"""
+
+import unittest
+from unittest.mock import MagicMock, mock_open, patch
+
+import main
+
+
+def _base_result(**overrides):
+    result = {
+        "success": True,
+        "relevant_texts": ["Some relevant text."],
+        "category_counts": {"Termination_Documents": 1},
+        "excluded_count": 2,
+        "total_files": 3,
+        "audit_log": [
+            {
+                "file_name": "letter.pdf",
+                "category": "Termination_Documents",
+                "is_relevant": True,
+                "reason": "Contains the dismissal letter.",
+            }
+        ],
+        "cache_path": "./output/stage1_cache.json",
+        "audit_report_path": "./output/audit_report.csv",
+    }
+    result.update(overrides)
+    return result
+
+
+def _mock_progress_context_manager():
+    """A stand-in for rich.progress.Progress that just no-ops as a context manager."""
+    progress_instance = MagicMock()
+    progress_instance.__enter__.return_value = progress_instance
+    progress_instance.add_task.return_value = "task-id"
+    return progress_instance
+
+
+class TestStage1Failure(unittest.TestCase):
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask")
+    @patch("main.process_evidence_package")
+    def test_failed_stage1_does_not_prompt_or_run_stage2(
+        self, mock_process, mock_confirm_ask, mock_console, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result(
+            success=False,
+            relevant_texts=[],
+            category_counts={},
+            excluded_count=0,
+            total_files=0,
+            audit_log=[],
+            cache_path=None,
+            audit_report_path=None,
+        )
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_confirm_ask.assert_not_called()
+
+
+class TestYesFlow(unittest.TestCase):
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("main.os.makedirs")
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.generate_summary")
+    @patch("main.semantic_scrub")
+    @patch("main.deterministic_scrub")
+    @patch("main.Confirm.ask", return_value=True)
+    @patch("main.process_evidence_package")
+    def test_yes_confirmation_runs_full_stage2_pipeline_and_writes_file(
+        self,
+        mock_process,
+        mock_confirm_ask,
+        mock_det_scrub,
+        mock_sem_scrub,
+        mock_gen_summary,
+        mock_console,
+        mock_progress_cls,
+        mock_makedirs,
+        mock_open_file,
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result(
+            relevant_texts=["Text about the dismissal.", "Text about payroll."]
+        )
+        mock_det_scrub.return_value = "deterministically scrubbed text"
+        mock_sem_scrub.return_value = "semantically scrubbed text"
+        mock_gen_summary.return_value = "Final anonymous summary."
+
+        with patch("sys.argv", ["main.py", "--output", "./output"]):
+            main.main()
+
+        mock_det_scrub.assert_called_once_with("Text about the dismissal.\n\nText about payroll.")
+        mock_sem_scrub.assert_called_once_with("deterministically scrubbed text")
+        mock_gen_summary.assert_called_once_with("semantically scrubbed text")
+
+        mock_open_file.assert_called_once_with(
+            "./output/anonymous_summary.md", "w", encoding="utf-8"
+        )
+        mock_open_file().write.assert_called_once_with("Final anonymous summary.")
+
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.generate_summary")
+    @patch("main.semantic_scrub")
+    @patch("main.deterministic_scrub")
+    @patch("main.Confirm.ask", return_value=True)
+    @patch("main.process_evidence_package")
+    def test_no_relevant_text_skips_summary_generation(
+        self,
+        mock_process,
+        mock_confirm_ask,
+        mock_det_scrub,
+        mock_sem_scrub,
+        mock_gen_summary,
+        mock_console,
+        mock_progress_cls,
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result(relevant_texts=[])
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_det_scrub.assert_not_called()
+        mock_sem_scrub.assert_not_called()
+        mock_gen_summary.assert_not_called()
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.generate_summary", return_value="")
+    @patch("main.semantic_scrub", return_value="semantically scrubbed text")
+    @patch("main.deterministic_scrub", return_value="deterministically scrubbed text")
+    @patch("main.Confirm.ask", return_value=True)
+    @patch("main.process_evidence_package")
+    def test_empty_summary_from_llm_does_not_write_output_file(
+        self,
+        mock_process,
+        mock_confirm_ask,
+        mock_det_scrub,
+        mock_sem_scrub,
+        mock_gen_summary,
+        mock_console,
+        mock_progress_cls,
+        mock_open_file,
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_open_file.assert_not_called()
+
+
+class TestNoFlow(unittest.TestCase):
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.generate_summary")
+    @patch("main.semantic_scrub")
+    @patch("main.deterministic_scrub")
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.process_evidence_package")
+    def test_no_confirmation_aborts_without_running_stage2(
+        self,
+        mock_process,
+        mock_confirm_ask,
+        mock_det_scrub,
+        mock_sem_scrub,
+        mock_gen_summary,
+        mock_console,
+        mock_progress_cls,
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_det_scrub.assert_not_called()
+        mock_sem_scrub.assert_not_called()
+        mock_gen_summary.assert_not_called()
+
+
+class TestArgumentParsing(unittest.TestCase):
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.process_evidence_package")
+    def test_custom_input_and_output_flags_are_passed_through(
+        self, mock_process, mock_confirm_ask, mock_console, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py", "--input", "custom.zip", "--output", "custom_out"]):
+            main.main()
+
+        args, kwargs = mock_process.call_args
+        self.assertEqual(args, ("custom.zip",))
+        self.assertEqual(kwargs["base_output_dir"], "custom_out")
+        self.assertTrue(callable(kwargs["progress_callback"]))
+
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.process_evidence_package")
+    def test_default_input_flag_is_rawdata_raw_zip(
+        self, mock_process, mock_confirm_ask, mock_console, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        args, kwargs = mock_process.call_args
+        self.assertEqual(args, ("rawdata/raw.zip",))
+        self.assertEqual(kwargs["base_output_dir"], "./output")
+
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.process_evidence_package")
+    def test_skip_stage1_flag_defaults_to_false(
+        self, mock_process, mock_confirm_ask, mock_console, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_process.assert_called_once()
+
+
+class TestSkipStage1Flow(unittest.TestCase):
+    @patch("main.process_evidence_package")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.generate_summary")
+    @patch("main.semantic_scrub")
+    @patch("main.deterministic_scrub")
+    @patch("main.Confirm.ask", return_value=True)
+    @patch("main.load_stage1_cache")
+    def test_skip_stage1_loads_cache_and_skips_extraction(
+        self,
+        mock_load_cache,
+        mock_confirm_ask,
+        mock_det_scrub,
+        mock_sem_scrub,
+        mock_gen_summary,
+        mock_console,
+        mock_process,
+    ):
+        mock_load_cache.return_value = ["Cached text A.", "Cached text B."]
+        mock_det_scrub.return_value = "scrubbed"
+        mock_sem_scrub.return_value = "semantic"
+        mock_gen_summary.return_value = "Final summary."
+
+        with patch("sys.argv", ["main.py", "--skip-stage1", "--output", "./output"]):
+            main.main()
+
+        mock_load_cache.assert_called_once_with("./output")
+        mock_process.assert_not_called()
+        mock_confirm_ask.assert_called_once()
+        mock_det_scrub.assert_called_once_with("Cached text A.\n\nCached text B.")
+
+    @patch("main.process_evidence_package")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask")
+    @patch("main.load_stage1_cache", return_value=None)
+    def test_skip_stage1_with_no_cache_aborts_without_prompting(
+        self, mock_load_cache, mock_confirm_ask, mock_console, mock_process
+    ):
+        with patch("sys.argv", ["main.py", "--skip-stage1"]):
+            main.main()
+
+        mock_confirm_ask.assert_not_called()
+        mock_process.assert_not_called()
+
+    @patch("main.Progress")
+    @patch("main.process_evidence_package")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.load_stage1_cache")
+    def test_normal_flow_never_calls_load_stage1_cache(
+        self, mock_load_cache, mock_confirm_ask, mock_console, mock_process, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        mock_load_cache.assert_not_called()
+
+
+class TestAuditReportNotice(unittest.TestCase):
+    @patch("main.console", new_callable=MagicMock)
+    def test_prints_notice_when_audit_report_path_is_present(self, mock_console):
+        main._print_audit_report_notice(_base_result(audit_report_path="./output/audit_report.csv"))
+
+        mock_console.print.assert_called_once()
+        (printed,), _ = mock_console.print.call_args
+        rendered = printed.renderable if hasattr(printed, "renderable") else str(printed)
+        self.assertIn("./output/audit_report.csv", str(rendered))
+
+    @patch("main.console", new_callable=MagicMock)
+    def test_prints_nothing_when_audit_report_path_is_missing(self, mock_console):
+        main._print_audit_report_notice(_base_result(audit_report_path=None))
+
+        mock_console.print.assert_not_called()
+
+    @patch("main.Progress")
+    @patch("main.console", new_callable=MagicMock)
+    @patch("main.Confirm.ask", return_value=False)
+    @patch("main.process_evidence_package")
+    def test_notice_is_shown_before_the_confirmation_prompt(
+        self, mock_process, mock_confirm_ask, mock_console, mock_progress_cls
+    ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
+        mock_process.return_value = _base_result()
+
+        snapshot = []
+
+        def _record_confirm(*args, **kwargs):
+            snapshot.extend(mock_console.print.call_args_list)
+            return False
+
+        mock_confirm_ask.side_effect = _record_confirm
+
+        with patch("sys.argv", ["main.py"]):
+            main.main()
+
+        # By the time Confirm.ask fires, the audit report notice must already
+        # have been printed — not deferred until after the prompt.
+        def _rendered_text(call_args):
+            (printed,), _ = call_args
+            return str(getattr(printed, "renderable", printed))
+
+        printed_texts = [_rendered_text(call_args) for call_args in snapshot]
+        self.assertTrue(any("audit_report.csv" in text for text in printed_texts))
+
+
+if __name__ == "__main__":
+    unittest.main()

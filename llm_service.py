@@ -19,10 +19,54 @@ import logging
 import os
 
 import anthropic
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "claude-sonnet-5"
+
+# Retry policy for transient Anthropic API failures: network errors, 429
+# (rate limit), and 5xx (server) errors. 4xx errors other than 429 (e.g. 400
+# Bad Request, 401, 403) indicate a malformed/unauthorized request that a
+# retry can't fix, so they are deliberately excluded and propagate straight
+# through to each function's outer except-block.
+_MAX_RETRY_ATTEMPTS = 5
+
+
+def _is_retryable_anthropic_error(exc: BaseException) -> bool:
+    if isinstance(exc, anthropic.APIConnectionError):
+        return True
+    if isinstance(exc, anthropic.RateLimitError):
+        return True
+    if isinstance(exc, anthropic.APIStatusError) and exc.status_code >= 500:
+        return True
+    return False
+
+
+@retry(
+    retry=retry_if_exception(_is_retryable_anthropic_error),
+    wait=wait_exponential(multiplier=1, min=1, max=30),
+    stop=stop_after_attempt(_MAX_RETRY_ATTEMPTS),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+def _create_message(client: anthropic.Anthropic, **kwargs):
+    """
+    Thin wrapper around client.messages.create() shared by every Anthropic
+    call in this module, so the retry policy lives in exactly one place.
+
+    Retries with exponential backoff on network errors, 429, and 5xx; raises
+    immediately on everything else (e.g. 400 Bad Request). Each caller's own
+    try/except still catches the final exception if all retries are
+    exhausted, and falls back to its existing safe default.
+    """
+    return client.messages.create(**kwargs)
 
 # Sonnet pricing, per million tokens.
 _INPUT_PRICE_PER_MTOK = 3.00
@@ -301,7 +345,8 @@ def categorize_document(text: str = None, image_base64: str = None, media_type: 
         else:
             raise ValueError("categorize_document requires either `text` or `image_base64`.")
 
-        response = client.messages.create(
+        response = _create_message(
+            client,
             model=MODEL_NAME,
             max_tokens=2000,
             messages=[{"role": "user", "content": content}],
@@ -329,7 +374,8 @@ def semantic_scrub(scrubbed_text: str) -> str:
     """
     try:
         client = _get_client()
-        response = client.messages.create(
+        response = _create_message(
+            client,
             model=MODEL_NAME,
             max_tokens=16384,
             system=_SEMANTIC_SCRUB_SYSTEM_PROMPT,
@@ -351,7 +397,8 @@ def generate_summary(safe_text: str) -> str:
     """
     try:
         client = _get_client()
-        response = client.messages.create(
+        response = _create_message(
+            client,
             model=MODEL_NAME,
             max_tokens=16384,
             system=_SUMMARY_SYSTEM_PROMPT,

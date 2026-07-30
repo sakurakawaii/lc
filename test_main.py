@@ -94,16 +94,28 @@ class TestYesFlow(unittest.TestCase):
         mock_process.return_value = _base_result(
             relevant_texts=["Text about the dismissal.", "Text about payroll."]
         )
-        mock_det_scrub.return_value = "deterministically scrubbed text"
-        mock_sem_scrub.return_value = "semantically scrubbed text"
+        mock_det_scrub.side_effect = lambda text: f"det[{text}]"
+        mock_sem_scrub.side_effect = lambda text: f"sem[{text}]"
         mock_gen_summary.return_value = "Final anonymous summary."
 
         with patch("sys.argv", ["main.py", "--output", "./output"]):
             main.main()
 
-        mock_det_scrub.assert_called_once_with("Text about the dismissal.\n\nText about payroll.")
-        mock_sem_scrub.assert_called_once_with("deterministically scrubbed text")
-        mock_gen_summary.assert_called_once_with("semantically scrubbed text")
+        # Map: each relevant text is scrubbed individually, in order, rather
+        # than joined into one giant string before scrubbing.
+        self.assertEqual(mock_det_scrub.call_count, 2)
+        mock_det_scrub.assert_any_call("Text about the dismissal.")
+        mock_det_scrub.assert_any_call("Text about payroll.")
+
+        self.assertEqual(mock_sem_scrub.call_count, 2)
+        mock_sem_scrub.assert_any_call("det[Text about the dismissal.]")
+        mock_sem_scrub.assert_any_call("det[Text about payroll.]")
+
+        # Reduce: only the fully-scrubbed per-file texts are joined, and only
+        # for the final summary generation call.
+        mock_gen_summary.assert_called_once_with(
+            "sem[det[Text about the dismissal.]]\n\nsem[det[Text about payroll.]]"
+        )
 
         mock_open_file.assert_called_once_with(
             "./output/anonymous_summary.md", "w", encoding="utf-8"
@@ -247,6 +259,7 @@ class TestArgumentParsing(unittest.TestCase):
 
 
 class TestSkipStage1Flow(unittest.TestCase):
+    @patch("main.Progress")
     @patch("main.process_evidence_package")
     @patch("main.console", new_callable=MagicMock)
     @patch("main.generate_summary")
@@ -263,7 +276,9 @@ class TestSkipStage1Flow(unittest.TestCase):
         mock_gen_summary,
         mock_console,
         mock_process,
+        mock_progress_cls,
     ):
+        mock_progress_cls.return_value = _mock_progress_context_manager()
         mock_load_cache.return_value = ["Cached text A.", "Cached text B."]
         mock_det_scrub.return_value = "scrubbed"
         mock_sem_scrub.return_value = "semantic"
@@ -275,7 +290,9 @@ class TestSkipStage1Flow(unittest.TestCase):
         mock_load_cache.assert_called_once_with("./output")
         mock_process.assert_not_called()
         mock_confirm_ask.assert_called_once()
-        mock_det_scrub.assert_called_once_with("Cached text A.\n\nCached text B.")
+        self.assertEqual(mock_det_scrub.call_count, 2)
+        mock_det_scrub.assert_any_call("Cached text A.")
+        mock_det_scrub.assert_any_call("Cached text B.")
 
     @patch("main.process_evidence_package")
     @patch("main.console", new_callable=MagicMock)

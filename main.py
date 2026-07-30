@@ -115,25 +115,46 @@ def _run_stage_1(input_path, output_dir):
         )
 
 
+def _scrub_texts_individually(relevant_texts):
+    """
+    Map each relevant text through deterministic_scrub then semantic_scrub
+    individually, rather than joining everything into one giant string
+    first. Keeps each LLM call's input bounded to a single document instead
+    of the whole evidence package, which would otherwise risk overflowing
+    the context window on large cases.
+    """
+    total = len(relevant_texts)
+    scrubbed_texts = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(f"Redacting PII (0/{total})...", total=total)
+        for index, text in enumerate(relevant_texts, start=1):
+            progress.update(task, description=f"Redacting PII ({index}/{total})...")
+            deterministically_scrubbed = deterministic_scrub(text)
+            semantically_scrubbed = semantic_scrub(deterministically_scrubbed)
+            scrubbed_texts.append(semantically_scrubbed)
+            progress.advance(task)
+    console.print(f"[dim]✓ Completed: Redacting PII for {total} document(s)[/dim]")
+    return scrubbed_texts
+
+
 def _run_stage_2(result, output_dir):
     console.print(Panel.fit("[bold cyan]Stage 2: Generating Anonymous Summary[/bold cyan]", border_style="cyan"))
 
-    if not result["relevant_texts"]:
+    relevant_texts = result["relevant_texts"]
+    if not relevant_texts:
         console.print("[yellow]No relevant evidence text was collected; skipping summary generation.[/yellow]")
         return
 
-    combined_text = "\n\n".join(result["relevant_texts"])
-
-    with console.status("[bold green]Redacting PII (deterministic scrub)...[/bold green]"):
-        deterministically_scrubbed = deterministic_scrub(combined_text)
-    console.print("[dim]✓ Completed: Redacting PII (deterministic scrub)[/dim]")
-
-    with console.status("[bold green]Calling LLM for semantic PII scrub...[/bold green]"):
-        semantically_scrubbed = semantic_scrub(deterministically_scrubbed)
-    console.print("[dim]✓ Completed: Calling LLM for semantic PII scrub[/dim]")
+    scrubbed_texts = _scrub_texts_individually(relevant_texts)
+    combined_text = "\n\n".join(scrubbed_texts)
 
     with console.status("[bold green]Generating anonymous case summary via LLM...[/bold green]"):
-        summary = generate_summary(semantically_scrubbed)
+        summary = generate_summary(combined_text)
     console.print("[dim]✓ Completed: Generating anonymous case summary via LLM[/dim]")
 
     if not summary:

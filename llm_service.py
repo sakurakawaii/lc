@@ -93,12 +93,49 @@ _CATEGORIZE_FALLBACK = {
     "description": "",
 }
 
+# Case-specific background shared by every prompt that needs to judge relevance or
+# summarize the evidence, so those decisions are grounded in the actual dispute
+# instead of a generic "employment case" framing.
+_CASE_BACKGROUND = (
+    "This is an unfair/unlawful dismissal case. The claimant is Michelle Anne Ritchie "
+    "(a former employee), and the respondent/employer is Northern Rivers Allied "
+    "Health. A key legal question is whether Ritchie's income was below the $190,100 "
+    "High Income Threshold at the time of dismissal, which affects her eligibility to "
+    "bring an unfair dismissal claim."
+)
+
+# One-line definition per category so boundary cases (e.g. a termination letter vs.
+# general correspondence) are judged consistently instead of from the bare category
+# name alone. Keep in sync with CATEGORIES above.
+_CATEGORY_DEFINITIONS = (
+    "Employment_Contracts: employment contracts, offer letters, position "
+    "descriptions, remuneration/salary structure documents.\n"
+    "Correspondence: emails, letters, and messages between the claimant and the "
+    "employer/HR/coworkers (not performance reviews or termination documents "
+    "themselves).\n"
+    "Performance_Reviews: performance appraisals, warning letters, performance "
+    "improvement plans (PIPs).\n"
+    "Termination_Documents: termination/dismissal letters, notices of termination, "
+    "and other formal documents related to the end of employment.\n"
+    "Payroll_Financial: payslips, salary records, bonuses, reimbursements — "
+    "especially anything showing whether income met the $190,100 threshold.\n"
+    "Other_Relevant_Evidence: evidence relevant to the case that doesn't fit the "
+    "categories above."
+)
+
 _CATEGORIZE_PROMPT = """You are triaging evidence for an employment-law dismissal case.
+
+{case_background}
 
 Decide whether the following document is relevant to the case, and if so, which \
 category it best fits.
 
-Valid categories: {categories}
+Valid categories:
+{category_definitions}
+
+If you are uncertain whether a document is relevant, err on the side of marking it \
+is_relevant: true and explain the uncertainty in "reason" — a human reviews anything \
+excluded, so a false exclusion is worse than a false inclusion.
 
 Use the classify_document tool to record your decision.
 
@@ -110,15 +147,24 @@ Document text:
 
 _IMAGE_CATEGORIZE_PROMPT = """You are triaging evidence for an employment-law dismissal case.
 
+{case_background}
+
 The attached image is a piece of evidence. Decide whether it is relevant to the case, \
 and if so, which category it best fits.
 
-Valid categories: {categories}
+Valid categories:
+{category_definitions}
+
+If you are uncertain whether the image is relevant, err on the side of marking it \
+is_relevant: true and explain the uncertainty in "reason" — a human reviews anything \
+excluded, so a false exclusion is worse than a false inclusion.
 
 Use the classify_document tool to record your decision. Also include a "description" \
 field: a brief plain-text transcription or description of the image's contents \
 (transcribe any visible text verbatim, and/or describe what it depicts) so it can be \
-used later to write a case summary. A few sentences is enough.
+used later to write a case summary. A few sentences is enough. If the image is \
+blurry, low-quality, or only partially legible, say so honestly in "description" \
+rather than guessing at content you can't actually read.
 """
 
 # Native tool-calling schema for Stage 1 categorization. `category`'s enum is
@@ -159,16 +205,21 @@ _CLASSIFY_DOCUMENT_TOOL = {
     },
 }
 
-_SEMANTIC_SCRUB_PROMPT = """The following text has already had names, emails, and phone \
-numbers removed by an automated deterministic filter and replaced with [REDACTED].
+_SEMANTIC_SCRUB_PROMPT = """The following text has already had the claimant's name, the \
+employer's name, emails, and phone numbers removed by an automated deterministic \
+filter and replaced with [REDACTED].
 
 Find and redact any REMAINING contextual personally identifying information that the \
-filter would have missed — for example coworker names, implied locations, job titles \
-tied to a specific person, or other identifying details. Replace each one with \
-[REDACTED].
+filter would have missed — for example coworker names, implied locations, or a job \
+title combined with other details specific enough to identify a third party. Replace \
+each one with [REDACTED].
 
-Do NOT remove or alter dollar figures, dates, or legal/financial thresholds (e.g. an \
-income threshold amount) — these must be preserved exactly as given.
+The claimant's own role, department, and similar details about her may be kept where \
+needed to tell the story of the case — the goal is to protect other identifiable \
+people, not to strip every job-related detail.
+
+Do NOT remove or alter dollar figures, dates, or legal/financial thresholds — in \
+particular the $190,100 High Income Threshold must be preserved exactly as given.
 
 Return ONLY the fully redacted text, with no commentary or markdown wrapper.
 
@@ -180,29 +231,43 @@ Text:
 
 _SEMANTIC_SCRUB_SYSTEM_PROMPT = (
     "You are a PII-redaction step in an employment-law evidence processing pipeline. "
-    "The text you receive has already had names, emails, and phone numbers replaced "
-    "with [REDACTED] by a deterministic filter. Your job is to find and redact any "
-    "remaining contextual personal information and return the redacted text."
+    + _CASE_BACKGROUND + " "
+    "The text you receive has already had the claimant's name, the employer's name, "
+    "email addresses, and phone numbers replaced with [REDACTED] by a deterministic "
+    "filter — don't worry about those, and don't be thrown off by [REDACTED] tokens "
+    "already present in the text. Your job is to find and redact any remaining "
+    "contextual personal information and return the redacted text."
 )
 
 _SUMMARY_SYSTEM_PROMPT = (
     "You are a case-summary generation step in an employment-law evidence processing "
-    "pipeline. The text you receive has already been through PII redaction. Your job "
-    "is to produce a professional, anonymised case summary based only on that text."
+    "pipeline. " + _CASE_BACKGROUND + " The text you receive has already been through "
+    "PII redaction. Your job is to produce a professional, anonymised case summary "
+    "based only on that text — report the facts as given; do not offer a legal "
+    "opinion or predict the likely outcome of the case."
 )
 
 _SUMMARY_PROMPT = """Using ONLY the fully redacted, anonymised text below, write a \
 professional, concise legal case summary suitable for a legal marketplace where law \
 firms decide whether to take on the case.
 
-Format the response as clean, professional Markdown: a top-level heading for the case \
-title, section headings (e.g. ## Background, ## Key Facts, ## Potential Claims) as \
-appropriate, and bullet points where they improve readability. Return ONLY the \
-Markdown document itself — no commentary, and do not wrap it in a code fence.
+The summary should give a law firm enough to assess the case, including — where the \
+text supports it — whether the dismissal appears to have been for a valid reason, \
+whether there are signs of unfair or unlawful treatment, and whether the $190,100 \
+High Income Threshold is relevant to the claimant's eligibility to bring a claim. Do \
+not speculate beyond what the text supports, and do not predict the likely outcome or \
+give a legal opinion on the merits — describe the facts and leave the assessment to \
+the reader.
+
+Format the response as clean, professional Markdown, roughly 400-800 words, with \
+these section headings in order: a top-level heading for the case title, then \
+## Background, ## Key Facts, ## Potential Claims, and ## Notable Evidence. Use bullet \
+points within sections where they improve readability. Return ONLY the Markdown \
+document itself — no commentary, and do not wrap it in a code fence.
 
 Do not invent any names, employers, or details not present in the text. Preserve any \
-financial or legal thresholds mentioned (e.g. an income threshold amount) exactly as \
-given.
+financial or legal thresholds mentioned (e.g. the $190,100 High Income Threshold) \
+exactly as given.
 
 Redacted case text:
 ---
@@ -345,11 +410,18 @@ def categorize_document(text: str = None, image_base64: str = None, media_type: 
                 },
                 {
                     "type": "text",
-                    "text": _IMAGE_CATEGORIZE_PROMPT.format(categories=", ".join(CATEGORIES)),
+                    "text": _IMAGE_CATEGORIZE_PROMPT.format(
+                        case_background=_CASE_BACKGROUND,
+                        category_definitions=_CATEGORY_DEFINITIONS,
+                    ),
                 },
             ]
         elif text:
-            content = _CATEGORIZE_PROMPT.format(categories=", ".join(CATEGORIES), text=text)
+            content = _CATEGORIZE_PROMPT.format(
+                case_background=_CASE_BACKGROUND,
+                category_definitions=_CATEGORY_DEFINITIONS,
+                text=text,
+            )
         else:
             raise ValueError("categorize_document requires either `text` or `image_base64`.")
 

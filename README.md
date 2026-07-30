@@ -106,6 +106,7 @@ To empirically measure the LLM's performance, an evaluation harness (`eval_harne
 ---
 
 ## 💡 Assumptions
+* **Scenario-Specific Prompt Engineering:** The current system prompts and instruction templates in `llm_service.py` (such as evidence triage for employment-law dismissal cases, category enumerations, and summary guidelines) are tailored specifically to the Michelle Anne Ritchie wrongful dismissal scenario. Generalizing this pipeline to support arbitrary legal practice areas would require robust, dynamic prompt-templating engines and significantly more prompt engineering.
 * **Dynamic PII Ingestion:** It is assumed that the intake system provides the target client name and employer upfront. These are currently hardcoded in `sanitizer.py` for this specific scenario. In a production environment, this would be dynamically parameterized by querying an intake database directly, or by taking an external configuration list (e.g., passing an `entities.json` or `.csv` file via a CLI argument) to build the deterministic scrubbing targets dynamically.
 * **Total Summary Context Window:** It is assumed that the total aggregated volume of the *relevant* and *scrubbed* text will fit within Claude's context window for the final summary generation step. 
 

@@ -5,12 +5,18 @@ The Anthropic client is fully mocked via unittest.mock — no real network calls
 are made and no API key is required to run these tests.
 """
 
-import json
 import unittest
 from unittest.mock import MagicMock, patch
 
 import llm_service
-from llm_service import categorize_document, generate_summary, semantic_scrub
+from llm_service import categorize_document, generate_summary, get_usage_report, semantic_scrub
+
+
+def _mock_usage(input_tokens: int = 100, output_tokens: int = 50) -> MagicMock:
+    usage = MagicMock()
+    usage.input_tokens = input_tokens
+    usage.output_tokens = output_tokens
+    return usage
 
 
 def _text_block(text: str) -> MagicMock:
@@ -27,27 +33,52 @@ def _thinking_block(thinking: str = "reasoning...") -> MagicMock:
     return block
 
 
-def _mock_response(text: str, leading_thinking: bool = False) -> MagicMock:
+def _tool_use_block(tool_input: dict, name: str = "classify_document") -> MagicMock:
+    block = MagicMock(spec=["type", "name", "input", "id"])
+    block.type = "tool_use"
+    block.name = name
+    block.input = tool_input
+    block.id = "toolu_test123"
+    return block
+
+
+def _mock_response(text: str, leading_thinking: bool = False, usage=None) -> MagicMock:
     response = MagicMock()
     blocks = [_thinking_block()] if leading_thinking else []
     blocks.append(_text_block(text))
     response.content = blocks
+    response.usage = usage if usage is not None else _mock_usage()
+    return response
+
+
+def _mock_tool_response(tool_input: dict, leading_thinking: bool = False, usage=None) -> MagicMock:
+    response = MagicMock()
+    blocks = [_thinking_block()] if leading_thinking else []
+    blocks.append(_tool_use_block(tool_input))
+    response.content = blocks
+    response.usage = usage if usage is not None else _mock_usage()
+    return response
+
+
+def _mock_response_with_only_thinking(stop_reason: str = "max_tokens") -> MagicMock:
+    response = MagicMock()
+    response.content = [_thinking_block()]
+    response.stop_reason = stop_reason
+    response.usage = _mock_usage()
     return response
 
 
 class TestCategorizeDocument(unittest.TestCase):
     @patch("llm_service.anthropic.Anthropic")
-    def test_valid_json_response_is_parsed_correctly(self, mock_anthropic_cls):
+    def test_valid_tool_input_is_parsed_correctly(self, mock_anthropic_cls):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_response(
-            json.dumps(
-                {
-                    "is_relevant": True,
-                    "category": "Termination_Documents",
-                    "reason": "Contains the dismissal letter.",
-                }
-            )
+        mock_client.messages.create.return_value = _mock_tool_response(
+            {
+                "is_relevant": True,
+                "category": "Termination_Documents",
+                "reason": "Contains the dismissal letter.",
+            }
         )
 
         result = categorize_document(text="Some termination letter text.")
@@ -63,30 +94,28 @@ class TestCategorizeDocument(unittest.TestCase):
         )
 
     @patch("llm_service.anthropic.Anthropic")
-    def test_strips_markdown_code_fence_before_parsing(self, mock_anthropic_cls):
+    def test_forces_tool_choice_and_defines_classify_document_tool(self, mock_anthropic_cls):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        payload = json.dumps(
+        mock_client.messages.create.return_value = _mock_tool_response(
             {"is_relevant": False, "category": "Other_Relevant_Evidence", "reason": "Not related."}
         )
-        mock_client.messages.create.return_value = _mock_response(f"```json\n{payload}\n```")
 
-        result = categorize_document("Unrelated grocery receipt.")
+        categorize_document("Unrelated grocery receipt.")
 
-        self.assertFalse(result["is_relevant"])
-        self.assertEqual(result["category"], "Other_Relevant_Evidence")
+        _, call_kwargs = mock_client.messages.create.call_args
+        self.assertEqual(call_kwargs["tool_choice"], {"type": "tool", "name": "classify_document"})
 
-    @patch("llm_service.anthropic.Anthropic")
-    def test_invalid_json_returns_safe_fallback_without_raising(self, mock_anthropic_cls):
-        mock_client = MagicMock()
-        mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_response("This is not valid JSON at all.")
+        (tool,) = call_kwargs["tools"]
+        self.assertEqual(tool["name"], "classify_document")
+        schema = tool["input_schema"]
+        self.assertEqual(schema["required"], ["is_relevant", "category", "reason"])
+        self.assertEqual(schema["properties"]["category"]["enum"], llm_service.CATEGORIES)
 
-        result = categorize_document("Some text.")
-
-        self.assertFalse(result["is_relevant"])
-        self.assertIn("category", result)
-        self.assertIn("reason", result)
+        # The old "respond with ONLY a valid JSON object" instruction is gone
+        # now that the schema is enforced by the tool, not the prompt.
+        prompt_text = call_kwargs["messages"][0]["content"]
+        self.assertNotIn("ONLY a valid JSON", prompt_text)
 
     @patch("llm_service.anthropic.Anthropic")
     def test_api_exception_returns_safe_fallback_without_raising(self, mock_anthropic_cls):
@@ -101,10 +130,10 @@ class TestCategorizeDocument(unittest.TestCase):
         self.assertIn("reason", result)
 
     @patch("llm_service.anthropic.Anthropic")
-    def test_missing_keys_in_json_fall_back_to_defaults(self, mock_anthropic_cls):
+    def test_missing_keys_in_tool_input_fall_back_to_defaults(self, mock_anthropic_cls):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_response(json.dumps({}))
+        mock_client.messages.create.return_value = _mock_tool_response({})
 
         result = categorize_document("Some text.")
 
@@ -113,17 +142,17 @@ class TestCategorizeDocument(unittest.TestCase):
         self.assertIsInstance(result["reason"], str)
 
     @patch("llm_service.anthropic.Anthropic")
-    def test_skips_leading_thinking_block_and_uses_text_block(self, mock_anthropic_cls):
+    def test_skips_leading_thinking_block_and_uses_tool_use_block(self, mock_anthropic_cls):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        payload = json.dumps(
+        mock_client.messages.create.return_value = _mock_tool_response(
             {
                 "is_relevant": True,
                 "category": "Correspondence",
                 "reason": "Dismissal-related email thread.",
-            }
+            },
+            leading_thinking=True,
         )
-        mock_client.messages.create.return_value = _mock_response(payload, leading_thinking=True)
 
         result = categorize_document("Some email text.")
 
@@ -144,14 +173,11 @@ class TestCategorizeDocument(unittest.TestCase):
     ):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        response = MagicMock()
-        response.content = [_thinking_block()]
-        response.stop_reason = "max_tokens"
-        mock_client.messages.create.return_value = response
+        mock_client.messages.create.return_value = _mock_response_with_only_thinking()
 
         result = categorize_document("Some text.")
 
-        # No text block -> the "{}" fallback parses cleanly, so this doesn't
+        # No tool_use block -> _extract_tool_input returns {}, so this doesn't
         # go through the exception handler at all; it's a normal, if empty,
         # categorization result.
         self.assertFalse(result["is_relevant"])
@@ -170,15 +196,13 @@ class TestCategorizeDocument(unittest.TestCase):
     def test_image_input_builds_vision_payload_and_returns_description(self, mock_anthropic_cls):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_response(
-            json.dumps(
-                {
-                    "is_relevant": True,
-                    "category": "Performance_Reviews",
-                    "reason": "Photo of a signed performance review.",
-                    "description": "A scanned performance review form with a signature at the bottom.",
-                }
-            )
+        mock_client.messages.create.return_value = _mock_tool_response(
+            {
+                "is_relevant": True,
+                "category": "Performance_Reviews",
+                "reason": "Photo of a signed performance review.",
+                "description": "A scanned performance review form with a signature at the bottom.",
+            }
         )
 
         result = categorize_document(image_base64="ZmFrZS1pbWFnZS1ieXRlcw==", media_type="image/png")
@@ -205,6 +229,8 @@ class TestCategorizeDocument(unittest.TestCase):
         self.assertEqual(image_block["source"]["data"], "ZmFrZS1pbWFnZS1ieXRlcw==")
         self.assertEqual(text_block["type"], "text")
         self.assertIn("Valid categories", text_block["text"])
+
+        self.assertEqual(call_kwargs["tool_choice"], {"type": "tool", "name": "classify_document"})
 
     @patch("llm_service.anthropic.Anthropic")
     def test_missing_text_and_image_returns_safe_fallback_without_calling_api(self, mock_anthropic_cls):
@@ -276,10 +302,7 @@ class TestSemanticScrub(unittest.TestCase):
     ):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        response = MagicMock()
-        response.content = [_thinking_block()]
-        response.stop_reason = "max_tokens"
-        mock_client.messages.create.return_value = response
+        mock_client.messages.create.return_value = _mock_response_with_only_thinking()
 
         original = "Already deterministically [REDACTED] text."
         result = semantic_scrub(original)
@@ -363,10 +386,7 @@ class TestGenerateSummary(unittest.TestCase):
     ):
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        response = MagicMock()
-        response.content = [_thinking_block()]
-        response.stop_reason = "max_tokens"
-        mock_client.messages.create.return_value = response
+        mock_client.messages.create.return_value = _mock_response_with_only_thinking()
 
         result = generate_summary("Fully redacted case text.")
 
@@ -386,6 +406,71 @@ class TestClientInitialization(unittest.TestCase):
     def test_client_initialized_with_env_api_key(self, mock_anthropic_cls):
         llm_service._get_client()
         mock_anthropic_cls.assert_called_once_with(api_key="test-key-123")
+
+
+class TestTokenTracker(unittest.TestCase):
+    def setUp(self):
+        llm_service._token_usage["input_tokens"] = 0
+        llm_service._token_usage["output_tokens"] = 0
+
+    @patch("llm_service.anthropic.Anthropic")
+    def test_categorize_document_accumulates_token_usage(self, mock_anthropic_cls):
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _mock_tool_response(
+            {"is_relevant": True, "category": "Termination_Documents", "reason": "x"},
+            usage=_mock_usage(input_tokens=120, output_tokens=40),
+        )
+
+        categorize_document(text="Some text.")
+
+        report = get_usage_report()
+        self.assertEqual(report["input_tokens"], 120)
+        self.assertEqual(report["output_tokens"], 40)
+
+    @patch("llm_service.anthropic.Anthropic")
+    def test_usage_accumulates_across_multiple_calls(self, mock_anthropic_cls):
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _mock_response(
+            "some text", usage=_mock_usage(input_tokens=100, output_tokens=50)
+        )
+
+        semantic_scrub("text one")
+        semantic_scrub("text two")
+
+        report = get_usage_report()
+        self.assertEqual(report["input_tokens"], 200)
+        self.assertEqual(report["output_tokens"], 100)
+
+    @patch("llm_service.anthropic.Anthropic")
+    def test_api_exception_does_not_track_usage(self, mock_anthropic_cls):
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.side_effect = RuntimeError("boom")
+
+        generate_summary("text")
+
+        report = get_usage_report()
+        self.assertEqual(report["input_tokens"], 0)
+        self.assertEqual(report["output_tokens"], 0)
+
+    def test_get_usage_report_calculates_cost_using_sonnet_pricing(self):
+        llm_service._token_usage["input_tokens"] = 1_000_000
+        llm_service._token_usage["output_tokens"] = 1_000_000
+
+        report = get_usage_report()
+
+        self.assertEqual(report["input_tokens"], 1_000_000)
+        self.assertEqual(report["output_tokens"], 1_000_000)
+        self.assertAlmostEqual(report["total_cost_usd"], 3.00 + 15.00)
+
+    def test_get_usage_report_with_no_usage_yet_is_zero_cost(self):
+        report = get_usage_report()
+
+        self.assertEqual(report["input_tokens"], 0)
+        self.assertEqual(report["output_tokens"], 0)
+        self.assertEqual(report["total_cost_usd"], 0.0)
 
 
 if __name__ == "__main__":

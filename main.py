@@ -17,7 +17,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
 from rich.table import Table
 
-from llm_service import generate_summary, semantic_scrub
+from llm_service import generate_summary, get_usage_report, semantic_scrub
 from pipeline import load_stage1_cache, process_evidence_package
 from sanitizer import deterministic_scrub
 
@@ -155,52 +155,68 @@ def _run_stage_2(result, output_dir):
         console.print(Panel(f"[bold red]Failed to save summary: {e}[/bold red]", border_style="red"))
 
 
+def _print_telemetry_report():
+    report = get_usage_report()
+    console.print(
+        Panel(
+            f"Total Input Tokens: [bold]{report['input_tokens']:,}[/bold]\n"
+            f"Total Output Tokens: [bold]{report['output_tokens']:,}[/bold]\n"
+            f"Total Cost (USD): [bold]${report['total_cost_usd']:.4f}[/bold]",
+            title="[bold yellow]System Telemetry & Cost Report[/bold yellow]",
+            border_style="yellow",
+        )
+    )
+
+
 def main(argv=None):
     args = _parse_args(argv)
 
-    if args.skip_stage1:
-        console.print(
-            Panel.fit("[bold cyan]Stage 1: Skipped (loading cached results)[/bold cyan]", border_style="cyan")
+    try:
+        if args.skip_stage1:
+            console.print(
+                Panel.fit("[bold cyan]Stage 1: Skipped (loading cached results)[/bold cyan]", border_style="cyan")
+            )
+            relevant_texts = load_stage1_cache(args.output)
+            if relevant_texts is None:
+                console.print(
+                    Panel(
+                        f"[bold red]No valid Stage 1 cache found in {args.output}. "
+                        "Run once without --skip-stage1 first.[/bold red]",
+                        border_style="red",
+                    )
+                )
+                return
+            result = {"relevant_texts": relevant_texts}
+        else:
+            console.print(Panel.fit("[bold cyan]Stage 1: Processing Evidence[/bold cyan]", border_style="cyan"))
+
+            result = _run_stage_1(args.input, args.output)
+
+            if not result["success"]:
+                console.print(
+                    Panel(
+                        "[bold red]Stage 1 failed. Check that the input zip file exists and is a valid archive.[/bold red]",
+                        border_style="red",
+                    )
+                )
+                return
+
+            _print_audit_summary(result)
+            _print_decision_table(result)
+            _print_audit_report_notice(result)
+
+        proceed = Confirm.ask(
+            "Do you accept this evidence package and want to generate the Anonymous Summary?",
+            default=True,
         )
-        relevant_texts = load_stage1_cache(args.output)
-        if relevant_texts is None:
-            console.print(
-                Panel(
-                    f"[bold red]No valid Stage 1 cache found in {args.output}. "
-                    "Run once without --skip-stage1 first.[/bold red]",
-                    border_style="red",
-                )
-            )
-            return
-        result = {"relevant_texts": relevant_texts}
-    else:
-        console.print(Panel.fit("[bold cyan]Stage 1: Processing Evidence[/bold cyan]", border_style="cyan"))
 
-        result = _run_stage_1(args.input, args.output)
-
-        if not result["success"]:
-            console.print(
-                Panel(
-                    "[bold red]Stage 1 failed. Check that the input zip file exists and is a valid archive.[/bold red]",
-                    border_style="red",
-                )
-            )
+        if not proceed:
+            console.print("[yellow]Aborted. No summary was generated.[/yellow]")
             return
 
-        _print_audit_summary(result)
-        _print_decision_table(result)
-        _print_audit_report_notice(result)
-
-    proceed = Confirm.ask(
-        "Do you accept this evidence package and want to generate the Anonymous Summary?",
-        default=True,
-    )
-
-    if not proceed:
-        console.print("[yellow]Aborted. No summary was generated.[/yellow]")
-        return
-
-    _run_stage_2(result, args.output)
+        _run_stage_2(result, args.output)
+    finally:
+        _print_telemetry_report()
 
 
 if __name__ == "__main__":

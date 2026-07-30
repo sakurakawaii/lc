@@ -11,8 +11,9 @@ To balance execution speed, cost, and data compliance within the allocated timeb
     *   `.eml`: Handled locally via Python's `email` module to extract text bodies and detach/re-route attachments back into the processing pipeline.
     *   `.docx` / Text-based `.pdf`: Handled locally via `python-docx` and `PyPDF2` for rapid, zero-cost text extraction.
 *   **LLM Engine (Logic & OCR):**
-    *   `.png` / `.jpg` / Scanned `.pdf`: Bypasses local text parsing; sent directly to Claude Sonnet 5 Vision API for robust OCR and understanding.
+    *   `.png` / `.jpg`: Bypasses local text parsing; sent directly to Claude Sonnet 5 Vision API for robust OCR and understanding.
     *   **Core Logic:** All locally extracted text is fed to Claude Sonnet 5 to determine relevance and return strict JSON categorization (Stage 1).
+    *   **Known limitation:** A `.pdf` with no extractable text layer (e.g. a scanned/photographed page saved as PDF) is NOT rendered to an image or sent to Vision — it yields empty text and is routed to `Excluded_Documents/` like any other unsupported file. Only `.png`/`.jpg`/`.jpeg` get OCR via Vision.
 *   **Two-Pass Hybrid Sanitization Pipeline:**
     To ensure enterprise-grade data compliance in Stage 2, anonymization is decoupled from summarization and split into two defensive layers:
     1.  **Deterministic Scrubbing (Local):** A fast, regex-based pass that hard-redacts known entities (e.g., the specific client and employer names) and standard patterns (emails, phone numbers, addresses), while explicitly whitelisting critical financial figures like the high-income threshold.

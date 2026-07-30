@@ -79,6 +79,15 @@ class TestApiKeyCheck(unittest.TestCase):
         mock_process.assert_not_called()
 
     @patch("main.console", new_callable=MagicMock)
+    @patch("main.process_evidence_package")
+    def test_whitespace_only_api_key_is_treated_as_missing(self, mock_process, mock_console):
+        with patch.dict("main.os.environ", {"ANTHROPIC_API_KEY": "   "}, clear=True):
+            with patch("sys.argv", ["main.py"]):
+                main.main()
+
+        mock_process.assert_not_called()
+
+    @patch("main.console", new_callable=MagicMock)
     @patch("main.Progress")
     @patch("main.Confirm.ask")
     @patch("main.process_evidence_package")
@@ -102,6 +111,48 @@ class TestApiKeyCheck(unittest.TestCase):
                 main.main()
 
         mock_process.assert_called_once()
+
+
+class TestPrintAuditSummary(unittest.TestCase):
+    @patch("main.console", new_callable=MagicMock)
+    def test_copy_failures_row_is_omitted_when_none_failed(self, mock_console):
+        result = _base_result()
+
+        main._print_audit_summary(result)
+
+        table = mock_console.print.call_args[0][0]
+        row_labels = [str(cell) for cell in table.columns[0]._cells]
+        self.assertFalse(any("Copy Failures" in label for label in row_labels))
+
+    @patch("main.console", new_callable=MagicMock)
+    def test_copy_failures_row_is_shown_and_counted_when_present(self, mock_console):
+        result = _base_result(
+            audit_log=[
+                {
+                    "file_name": "letter.pdf",
+                    "category": "Termination_Documents",
+                    "is_relevant": True,
+                    "reason": "Contains the dismissal letter.",
+                    "copy_failed": True,
+                },
+                {
+                    "file_name": "email.eml",
+                    "category": "Correspondence",
+                    "is_relevant": True,
+                    "reason": "Relevant email.",
+                    "copy_failed": False,
+                },
+            ]
+        )
+
+        main._print_audit_summary(result)
+
+        table = mock_console.print.call_args[0][0]
+        row_labels = [str(cell) for cell in table.columns[0]._cells]
+        count_cells = [str(cell) for cell in table.columns[1]._cells]
+        matches = [i for i, label in enumerate(row_labels) if "Copy Failures" in label]
+        self.assertEqual(len(matches), 1)
+        self.assertIn("1", count_cells[matches[0]])
 
 
 class TestYesFlow(unittest.TestCase):

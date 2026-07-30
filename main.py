@@ -60,6 +60,14 @@ def _print_audit_summary(result):
         table.add_row(f"Evidence_Package/{category}", str(result["category_counts"][category]))
 
     table.add_row("Excluded_Documents", str(result["excluded_count"]))
+
+    copy_failed_count = sum(1 for entry in result["audit_log"] if entry.get("copy_failed"))
+    if copy_failed_count:
+        table.add_row(
+            "[bold red]Copy Failures (NOT saved!)[/bold red]",
+            f"[bold red]{copy_failed_count}[/bold red]",
+        )
+
     table.add_row("Total Files Processed", str(result["total_files"]), style="bold")
 
     console.print(table)
@@ -200,7 +208,7 @@ def _check_api_key():
     "irrelevant"/"categorization failed" results that look like a model
     judgment rather than a missing credential.
     """
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
         return True
     console.print(
         Panel(

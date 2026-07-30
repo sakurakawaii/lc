@@ -226,9 +226,6 @@ def _extract_text_from_response(response, fallback: str = "ERROR: No text genera
             return block.text
 
     stop_reason = getattr(response, "stop_reason", None)
-    print(
-        f"DEBUG API ERROR - stop_reason: {stop_reason!r} - Raw Content: {response.content}"
-    )
     logger.error(
         "No text block found in Anthropic response content (stop_reason=%r); "
         "returning fallback %r. Raw content: %r",
@@ -254,9 +251,6 @@ def _extract_tool_input(response) -> dict:
             return dict(block.input)
 
     stop_reason = getattr(response, "stop_reason", None)
-    print(
-        f"DEBUG API ERROR - stop_reason: {stop_reason!r} - Raw Content: {response.content}"
-    )
     logger.error(
         "No tool_use block found in Anthropic response content (stop_reason=%r); "
         "returning empty dict. Raw content: %r",

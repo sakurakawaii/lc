@@ -87,15 +87,15 @@ Anonymization is handled via a **Two-Pass Hybrid Sanitization Pipeline** to ensu
 
 This project is built with rigorous defensive programming, featuring both a comprehensive mocked unit test suite and a live LLM evaluation harness.
 
-**1. Unit Tests (Zero-Cost, Mocked)**
+1. **Unit Tests (Zero-Cost, Mocked)**
 The test suite covers routing logic, regex sanitization, and API retry behaviors using fully mocked file I/O and mocked Anthropic API clients. Run the test suite via:
 `python -m unittest discover`
 
-**2. LLM Evaluation Harness (Live API)**
+2. **LLM Evaluation Harness (Live API)**
 To empirically measure the LLM's performance, an evaluation harness (`eval_harness.py`) is provided. This script runs a ground-truth dataset through the live Anthropic API to calculate:
-* **Classification Accuracy:** Checks if Stage 1 correctly labels and categorizes cases.
-* **PII Safety (Zero Leakage):** Verifies that deterministic and semantic scrubbing stages successfully block known entities from leaking.
-* **Threshold Preservation:** Ensures protected financial thresholds (e.g., $190,100) safely survive the two-pass sanitization.
+    1. **Classification Accuracy:** Checks if Stage 1 correctly labels and categorizes cases.
+    2. **PII Safety (Zero Leakage):** Verifies that deterministic and semantic scrubbing stages successfully block known entities from leaking.
+    3. **Threshold Preservation:** Ensures protected financial thresholds (e.g., $190,100) safely survive the two-pass sanitization.
 *Run via: `python eval_harness.py` (Note: This makes real API calls and incurs standard token costs).*
 
 ---
